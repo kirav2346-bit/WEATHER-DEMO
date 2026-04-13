@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>全球即時氣象觀測站</title>
+    
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        /* CSS 部分 */
+        body { 
+            background: #1a1a2e; 
+            font-family: "PingFang TC", "Microsoft JhengHei", sans-serif; 
+            display: flex; 
+            justify-content: center; 
+            padding: 20px; 
+            margin: 0;
+        }
+        
+        .weather-card { 
+            background: #fff; 
+            padding: 25px; 
+            border-radius: 20px; 
+            width: 100%; 
+            max-width: 480px; 
+            box-shadow: 0 15px 35px rgba(0,0,0,0.4); 
+            border-top: 10px solid #3498db;
+        }
+        
+        .header { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            border-bottom: 2px solid #f0f0f0; 
+            padding-bottom: 10px;
+        }
+        
+        #main-icon { 
+            font-size: 3.5rem; 
+            color: #f39c12; 
+            animation: float 3s ease-in-out infinite; 
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+        
+        .search-box { display: flex; gap: 10px; margin: 20px 0; }
+        
+        input { 
+            flex: 1; 
+            padding: 12px; 
+            border: 2px solid #eee; 
+            border-radius: 10px; 
+            font-size: 1rem;
+            outline: none;
+        }
+        
+        button { 
+            padding: 12px 20px; 
+            background: #3498db; 
+            color: #fff; 
+            border: none; 
+            border-radius: 10px; 
+            cursor: pointer; 
+            transition: 0.3s;
+        }
+        
+        button:hover { background: #2980b9; }
+        
+        .temp-display { 
+            font-size: 3.5rem; 
+            text-align: center; 
+            color: #e67e22; 
+            font-weight: bold; 
+            margin: 15px 0;
+        }
+        
+        .section-title { 
+            margin: 25px 0 10px; 
+            font-weight: bold; 
+            color: #2c3e50; 
+            border-left: 5px solid #3498db; 
+            padding-left: 10px; 
+        }
+        
+        .table-container { 
+            max-height: 220px; 
+            overflow-y: auto; 
+            border: 1px solid #f1f1f1; 
+            border-radius: 10px; 
+        }
+        
+        table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        
+        th, td { padding: 12px; border-bottom: 1px solid #f8f9fa; text-align: center; }
+        
+        th { background: #fdfdfd; position: sticky; top: 0; }
+        
+        #map { height: 350px; border-radius: 15px; margin-top: 15px; background: #000; }
+        
+        #statusMsg { text-align: center; color: #888; font-size: 0.9rem; margin-top: 15px; }
+    </style>
+</head>
+<body>
+
+<div class="weather-card">
+    <div class="header">
+        <h2>氣象觀測儀表板</h2>
+        <div id="main-icon"><i class="fa-solid fa-satellite-dish"></i></div>
+    </div>
+
+    <div class="search-box">
+        <input type="text" id="cityInput" placeholder="輸入城市 (如: Taipei, Tokyo...)">
+        <button id="searchBtn"><i class="fa-solid fa-magnifying-glass"></i></button>
+    </div>
+
+    <div id="weatherResult" style="display: none;">
+        <h3 id="displayCity">---</h3>
+        <div class="temp-display"><span id="displayTemp">--</span>°C</div>
+
+        <div class="section-title"><i class="fa-solid fa-clock"></i> 12小時預報</div>
+        <div class="table-container">
+            <table id="hourly-table">
+                <thead><tr><th>時間</th><th>狀態</th><th>溫度</th></tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <div class="section-title"><i class="fa-solid fa-calendar-week"></i> 一週預報</div>
+        <div class="table-container">
+            <table id="weekly-table">
+                <thead><tr><th>日期</th><th>狀態</th><th>最高/最低</th></tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <div class="section-title"><i class="fa-solid fa-earth-asia"></i> 分層設色雷達圖</div>
+        <div id="map"></div>
+    </div>
+
+    <p id="statusMsg">等待觀測指令...</p>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+    // JavaScript 部分
+    document.addEventListener('DOMContentLoaded', () => {
+        const searchBtn = document.getElementById('searchBtn');
+        const cityInput = document.getElementById('cityInput');
+        const weatherResult = document.getElementById('weatherResult');
+        const statusMsg = document.getElementById('statusMsg');
+        let map;
+
+        const getWeatherIcon = (code) => {
+            if (code <= 1) return '<i class="fa-solid fa-sun" style="color:#f1c40f"></i>';
+            if (code <= 3) return '<i class="fa-solid fa-cloud-sun" style="color:#f39c12"></i>';
+            if (code <= 67) return '<i class="fa-solid fa-cloud-showers-heavy" style="color:#3498db"></i>';
+            if (code <= 82) return '<i class="fa-solid fa-cloud-rain" style="color:#2980b9"></i>';
+            return '<i class="fa-solid fa-cloud" style="color:#95a5a6"></i>';
+        };
+
+        const performSearch = async () => {
+            const city = cityInput.value.trim();
+            if (!city) return;
+
+            statusMsg.innerText = "正在連線氣象觀測站...";
+            weatherResult.style.display = "none";
+
+            try {
+                // 1. 座標查詢
+                const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(city)}&limit=1`, {
+                    headers: { 'User-Agent': 'WeatherApp/1.0' }
+                });
+                const geoData = await geoRes.json();
+                if (!geoData.length) throw new Error("CITY_NOT_FOUND");
+                const { lat, lon } = geoData[0];
+
+                // 2. 天氣數據查詢
+                const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&hourly=temperature_2m,weathercode&daily=temperature_2m_max,temperature_2m_min,weathercode&timezone=auto`);
+                const data = await weatherRes.json();
+
+                // 3. 更新 UI
+                document.getElementById('displayCity').innerText = city.toUpperCase();
+                document.getElementById('displayTemp').innerText = Math.round(data.current_weather.temperature);
+                document.getElementById('main-icon').innerHTML = getWeatherIcon(data.current_weather.weathercode);
+
+                // 12小時預報
+                const hBody = document.querySelector('#hourly-table tbody');
+                hBody.innerHTML = data.hourly.time.slice(0, 12).map((t, i) => `
+                    <tr><td>${t.split('T')[1]}</td><td>${getWeatherIcon(data.hourly.weathercode[i])}</td><td>${data.hourly.temperature_2m[i]}°</td></tr>
+                `).join('');
+
+                // 一週預報
+                const wBody = document.querySelector('#weekly-table tbody');
+                wBody.innerHTML = data.daily.time.map((d, i) => `
+                    <tr><td>${d.slice(5)}</td><td>${getWeatherIcon(data.daily.weathercode[i])}</td><td><span style="color:#e74c3c">${data.daily.temperature_2m_max[i]}°</span> / <span style="color:#3498db">${data.daily.temperature_2m_min[i]}°</span></td></tr>
+                `).join('');
+
+                // 4. 地圖與雷達圖
+                if (map) map.remove();
+                map = L.map('map').setView([lat, lon], 5);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+                const rvData = await fetch('https://api.rainviewer.com/public/weather-maps.json').then(r => r.json());
+                const latestRadar = rvData.radar.past.slice(-1)[0].time;
+                L.tileLayer(`https://tilecache.rainviewer.com/v2/radar/${latestRadar}/256/{z}/{x}/{y}/2/1_1.png`, {
+                    opacity: 0.6,
+                    zIndex: 100
+                }).addTo(map);
+
+                L.marker([lat, lon]).addTo(map);
+                weatherResult.style.display = "block";
+                statusMsg.innerText = "";
+
+            } catch (err) {
+                statusMsg.innerText = err.message === "CITY_NOT_FOUND" ? "找不到城市" : "連線失敗，請重試";
+            }
+        };
+
+        searchBtn.addEventListener('click', performSearch);
+        cityInput.addEventListener('keypress', (e) => { if(e.key === 'Enter') performSearch(); });
+    });
+</script>
+
+</body>
+</html>
